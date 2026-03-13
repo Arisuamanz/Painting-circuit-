@@ -65,11 +65,14 @@
             pattern: 'rgba(0, 0, 0, 0.12)'
         };
 
-        let lastTime = 0; // Tetapkan ke 0 untuk fix permulaan masa
+        let lastTime = 0; 
         let dt = 0;
         let gameState = 'MENU'; 
         let currentPaintPercentage = 0;
         let pulseTimer = 0; 
+        
+        // Pembolehubah Tahap (Stage)
+        let currentStage = 1;
         
         // Entiti Pemain
         const player = {
@@ -120,23 +123,40 @@
             particles = [];
             paintedSegments = []; 
             currentPaintPercentage = 0;
+            enemies = [];
             
-            // 3 Musuh
-            enemies = [
-                { progress: 0.3, speed: 0.06, size: 22 }, 
-                { progress: 0.6, speed: 0.05, size: 22 },
-                { progress: 0.9, speed: 0.03, size: 22 } 
-            ];
+            // Generate enemies based on currentStage
+            for (let i = 0; i < currentStage; i++) {
+                let startProg = 0.25; 
+                if (currentStage > 1) {
+                    startProg = 0.25 + (i * (0.65 / (currentStage - 1)));
+                }
+
+                // Rawak kelajuan musuh antara 0.03 hingga 0.065
+                // Memastikan ia tidak akan sama dengan kelajuan pemain (0.08)
+                let randomSpeed = 0.03 + (Math.random() * 0.035);
+
+                enemies.push({ 
+                    progress: startProg, 
+                    speed: randomSpeed, 
+                    size: 22 
+                });
+            }
         }
 
-        function resetGame() {
+        function resetGame(nextStage = false) {
+            if (nextStage) {
+                currentStage++;
+            } else {
+                currentStage = 1; // Kembali ke Stage 1 jika kalah
+            }
+
             player.progress = 0;
             player.jumpOffset = 0;
             player.jumpVelocity = 0;
             player.isGrounded = true;
             generateLevel();
             gameState = 'PLAYING';
-            // Kemaskini lastTime supaya dt dikira dengan betul pada frame pertama selepas reset
             lastTime = performance.now(); 
         }
 
@@ -188,10 +208,19 @@
 
         function handleInput(e) {
             e.preventDefault();
-            if (gameState === 'MENU' || gameState === 'GAMEOVER' || gameState === 'WIN') {
-                resetGame();
+            if (gameState === 'MENU') {
+                resetGame(false);
                 return;
             }
+            if (gameState === 'GAMEOVER') {
+                resetGame(false); // Restart Stage 1
+                return;
+            }
+            if (gameState === 'WIN') {
+                resetGame(true); // Naik Stage
+                return;
+            }
+
             if (gameState === 'PLAYING' && player.isGrounded) {
                 player.jumpVelocity = player.jumpForce;
                 player.isGrounded = false;
@@ -205,7 +234,6 @@
             }
         }
 
-        // Elak multiple fires pada peranti mudah alih dengan passive: false
         window.addEventListener('touchstart', handleInput, {passive: false});
         window.addEventListener('mousedown', handleInput);
         window.addEventListener('touchend', handleInputEnd);
@@ -230,7 +258,6 @@
             let newProg = player.progress % 1.0;
 
             if (player.isGrounded) {
-                // Check if loop crosses the 0 / 1.0 mark
                 if (newProg < oldProg) {
                     addPaintSegment(oldProg, 1.0);
                     addPaintSegment(0.0, newProg);
@@ -411,13 +438,18 @@
                 ctx.arc(cx, cy, 60, 0, Math.PI*2);
                 ctx.fill();
 
+                // Paparkan Teks Stage di atas peratusan
+                ctx.fillStyle = 'rgba(255, 255, 255, 0.7)';
+                ctx.font = 'bold 16px Montserrat, Arial';
+                ctx.textAlign = 'center';
+                ctx.fillText(`STAGE ${currentStage}`, cx, cy - 25);
+
                 ctx.fillStyle = COLORS.text;
                 ctx.shadowColor = 'rgba(0,0,0,0.5)';
                 ctx.shadowBlur = 10;
-                ctx.font = '900 48px Montserrat, Arial';
-                ctx.textAlign = 'center';
+                ctx.font = '900 42px Montserrat, Arial';
                 ctx.textBaseline = 'middle';
-                ctx.fillText(`${currentPaintPercentage}%`, cx, cy + 5);
+                ctx.fillText(`${currentPaintPercentage}%`, cx, cy + 10);
                 ctx.shadowBlur = 0;
             }
 
@@ -453,12 +485,12 @@
                 
                 ctx.fillStyle = COLORS.text;
                 ctx.font = '24px Montserrat';
-                ctx.fillText(`Painted: ${currentPaintPercentage}%`, cx, cy + 10);
+                ctx.fillText(`Failed at Stage ${currentStage}`, cx, cy + 10);
                 
                 ctx.globalAlpha = 0.5 + pulse * 0.5;
                 ctx.fillStyle = COLORS.paint;
                 ctx.font = '20px Montserrat';
-                ctx.fillText('TAP TO RETRY', cx, cy + 100);
+                ctx.fillText('TAP TO RESTART STAGE 1', cx, cy + 100);
                 ctx.globalAlpha = 1.0;
             }
             else if (gameState === 'WIN') {
@@ -475,22 +507,21 @@
                 
                 ctx.fillStyle = COLORS.text;
                 ctx.font = '24px Montserrat';
-                ctx.fillText(`100% PAINTED!`, cx, cy + 10);
+                ctx.fillText(`Stage ${currentStage} Complete!`, cx, cy + 10);
                 
                 ctx.globalAlpha = 0.5 + pulse * 0.5;
                 ctx.fillStyle = COLORS.paint;
                 ctx.font = '20px Montserrat';
-                ctx.fillText('TAP TO PLAY AGAIN', cx, cy + 100);
+                ctx.fillText('TAP FOR NEXT STAGE', cx, cy + 100);
                 ctx.globalAlpha = 1.0;
             }
         }
 
         function loop(timestamp) {
-            if (!lastTime) lastTime = timestamp; // Initialize untuk first frame
+            if (!lastTime) lastTime = timestamp; 
             dt = (timestamp - lastTime) / 1000;
             lastTime = timestamp;
 
-            // FIX: Halang masa negatif jika ada lag pada peranti ketika tap!
             if (dt < 0) dt = 0; 
             if (dt > 0.1) dt = 0.1;
 
