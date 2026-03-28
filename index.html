@@ -42,15 +42,13 @@
             canvas.height = window.innerHeight;
             cx = canvas.width / 2;
             cy = canvas.height / 2;
-            
             trackRadius = Math.min(canvas.width, canvas.height) * 0.42;
             trackWidth = 10; 
-            
             createPattern(); 
         }
         window.addEventListener('resize', resizeCanvas);
 
-        // Palet Warna Premium
+        // Palet Warna
         const COLORS = {
             bgCenter: '#3f9b7d', 
             bgEdge: '#1a3c2e',   
@@ -65,16 +63,77 @@
             pattern: 'rgba(0, 0, 0, 0.12)'
         };
 
+        // --- SISTEM AUDIO (Web Audio API) ---
+        let audioCtx = null;
+        let masterGain = null;
+
+        const SoundFX = {
+            init: function() {
+                if (audioCtx !== null) {
+                    if (audioCtx.state === 'suspended') audioCtx.resume();
+                    return;
+                }
+                
+                const AudioContext = window.AudioContext || window.webkitAudioContext;
+                audioCtx = new AudioContext();
+                masterGain = audioCtx.createGain();
+                
+                // KELANTANGAN DITETAPKAN KE 7.0 MENGIKUT ARAHAN
+                masterGain.gain.value = 7.0; 
+                masterGain.connect(audioCtx.destination);
+                
+                const osc = audioCtx.createOscillator();
+                osc.connect(masterGain);
+                osc.start(0);
+                osc.stop(0.001);
+            },
+            playTone: function(freq, type, duration, vol, slideFreq) {
+                if (!audioCtx) return;
+                if (audioCtx.state === 'suspended') audioCtx.resume();
+                
+                const osc = audioCtx.createOscillator();
+                const gainNode = audioCtx.createGain();
+
+                osc.type = type;
+                osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+                if (slideFreq) {
+                    osc.frequency.exponentialRampToValueAtTime(slideFreq, audioCtx.currentTime + duration);
+                }
+
+                gainNode.gain.setValueAtTime(vol, audioCtx.currentTime);
+                gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + duration);
+
+                osc.connect(gainNode);
+                gainNode.connect(masterGain);
+
+                osc.start();
+                osc.stop(audioCtx.currentTime + duration);
+            },
+            jump: function() { this.playTone(400, 'triangle', 0.25, 1.0, 600); }, 
+            crash: function() { 
+                setTimeout(() => this.playTone(329.6, 'triangle', 0.3, 1.0), 0);
+                setTimeout(() => this.playTone(261.6, 'triangle', 0.3, 1.0), 150);
+                setTimeout(() => this.playTone(196.0, 'triangle', 0.5, 1.0), 300);
+            },
+            start: function() { this.playTone(600, 'square', 0.1, 0.8, 800); },
+            win: function() {
+                setTimeout(() => this.playTone(440, 'triangle', 0.2, 1.0), 0);
+                setTimeout(() => this.playTone(554, 'triangle', 0.2, 1.0), 100);
+                setTimeout(() => this.playTone(659, 'triangle', 0.2, 1.0), 200);
+                setTimeout(() => this.playTone(880, 'triangle', 0.4, 1.0), 300);
+            }
+        };
+
         let lastTime = 0; 
         let dt = 0;
         let gameState = 'MENU'; 
         let currentPaintPercentage = 0;
         let pulseTimer = 0; 
+        let crashTimer = 0; // Pembolehubah untuk Delay Panel Kalah
         
-        // Pembolehubah Tahap (Stage)
-        let currentStage = 1;
+        // Simpan stage dalam LocalStorage
+        let currentStage = parseInt(localStorage.getItem('paintRaceStage')) || 1;
         
-        // Entiti Pemain
         const player = {
             progress: 0, 
             speed: 0.08, 
@@ -86,12 +145,10 @@
             isGrounded: true
         };
 
-        // Entiti Lain & Segmen Cat
         let enemies = [];
         let particles = [];
         let paintedSegments = [];
 
-        // Hasilkan corak segi tiga
         function createPattern() {
             patternCanvas = document.createElement('canvas');
             patternCanvas.width = canvas.width;
@@ -125,22 +182,14 @@
             currentPaintPercentage = 0;
             enemies = [];
             
-            // Generate enemies based on currentStage
             for (let i = 0; i < currentStage; i++) {
                 let startProg = 0.25; 
                 if (currentStage > 1) {
                     startProg = 0.25 + (i * (0.65 / (currentStage - 1)));
                 }
 
-                // Rawak kelajuan musuh antara 0.03 hingga 0.065
-                // Memastikan ia tidak akan sama dengan kelajuan pemain (0.08)
                 let randomSpeed = 0.03 + (Math.random() * 0.035);
-
-                enemies.push({ 
-                    progress: startProg, 
-                    speed: randomSpeed, 
-                    size: 22 
-                });
+                enemies.push({ progress: startProg, speed: randomSpeed, size: 22 });
             }
         }
 
@@ -148,8 +197,11 @@
             if (nextStage) {
                 currentStage++;
             } else {
-                currentStage = 1; // Kembali ke Stage 1 jika kalah
+                currentStage = 1; 
             }
+
+            // Simpan Progress ke LocalStorage
+            localStorage.setItem('paintRaceStage', currentStage);
 
             player.progress = 0;
             player.jumpOffset = 0;
@@ -163,8 +215,7 @@
         function spawnParticles(x, y) {
             if (player.isGrounded && Math.random() > 0.4) {
                 particles.push({
-                    x: x,
-                    y: y,
+                    x: x, y: y,
                     vx: (Math.random() - 0.5) * 60,
                     vy: (Math.random() - 0.5) * 60,
                     life: 1.0,
@@ -174,14 +225,12 @@
             }
         }
 
-        // Fungsi Tambah & Gabung Segmen Cat
         function addPaintSegment(start, end) {
             start = Math.max(0, Math.min(1, start));
             end = Math.max(0, Math.min(1, end));
             if (start >= end) return;
 
             paintedSegments.push({ start, end });
-            
             paintedSegments.sort((a, b) => a.start - b.start);
             let merged = [paintedSegments[0]];
             
@@ -200,30 +249,41 @@
             let totalPainted = paintedSegments.reduce((sum, seg) => sum + (seg.end - seg.start), 0);
             currentPaintPercentage = Math.floor(totalPainted * 100);
 
-            if (totalPainted >= 0.995) {
+            if (totalPainted >= 0.995 && gameState !== 'WIN' && gameState !== 'CRASHING') {
                 currentPaintPercentage = 100;
                 gameState = 'WIN';
+                SoundFX.win();
             }
         }
 
         function handleInput(e) {
             e.preventDefault();
+            
+            SoundFX.init();
+
+            // Jika dalam tempoh delay kalah, jangan layan input
+            if (gameState === 'CRASHING') return;
+
             if (gameState === 'MENU') {
+                SoundFX.start();
                 resetGame(false);
                 return;
             }
             if (gameState === 'GAMEOVER') {
-                resetGame(false); // Restart Stage 1
+                SoundFX.start();
+                resetGame(false); 
                 return;
             }
             if (gameState === 'WIN') {
-                resetGame(true); // Naik Stage
+                SoundFX.start();
+                resetGame(true); 
                 return;
             }
 
             if (gameState === 'PLAYING' && player.isGrounded) {
                 player.jumpVelocity = player.jumpForce;
                 player.isGrounded = false;
+                SoundFX.jump();
             }
         }
 
@@ -236,52 +296,61 @@
 
         window.addEventListener('touchstart', handleInput, {passive: false});
         window.addEventListener('mousedown', handleInput);
-        window.addEventListener('touchend', handleInputEnd);
+        window.addEventListener('touchend', handleInputEnd, {passive: false});
         window.addEventListener('mouseup', handleInputEnd);
 
         function getCoords(progress, offsetRadius = 0) {
             const angle = -Math.PI / 2 + (progress * Math.PI * 2);
             const r = trackRadius - offsetRadius;
-            return {
-                x: cx + Math.cos(angle) * r,
-                y: cy + Math.sin(angle) * r,
-                angle: angle
-            };
+            return { x: cx + Math.cos(angle) * r, y: cy + Math.sin(angle) * r, angle: angle };
         }
 
         function update() {
             pulseTimer += dt;
-            if (gameState !== 'PLAYING') return;
-
-            let oldProg = player.progress % 1.0;
-            player.progress += player.speed * dt;
-            let newProg = player.progress % 1.0;
-
-            if (player.isGrounded) {
-                if (newProg < oldProg) {
-                    addPaintSegment(oldProg, 1.0);
-                    addPaintSegment(0.0, newProg);
-                } else {
-                    addPaintSegment(oldProg, newProg);
+            
+            // Semak Timer Delay Kalah
+            if (gameState === 'CRASHING') {
+                crashTimer -= dt;
+                if (crashTimer <= 0) {
+                    gameState = 'GAMEOVER';
                 }
             }
 
-            for (let enemy of enemies) {
-                enemy.progress -= enemy.speed * dt;
-                if (enemy.progress < 0) enemy.progress += 1.0; 
-            }
+            if (gameState !== 'PLAYING' && gameState !== 'CRASHING') return;
 
-            if (!player.isGrounded) {
-                player.jumpOffset += player.jumpVelocity * dt;
-                player.jumpVelocity -= player.gravity * dt;
+            // Bekukan pergerakan jika sedang CRASHING, tapi benarkan particle update
+            if (gameState === 'PLAYING') {
+                let oldProg = player.progress % 1.0;
+                player.progress += player.speed * dt;
+                let newProg = player.progress % 1.0;
 
-                if (player.jumpOffset <= 0) {
-                    player.jumpOffset = 0;
-                    player.jumpVelocity = 0;
-                    player.isGrounded = true;
+                if (player.isGrounded) {
+                    if (newProg < oldProg) {
+                        addPaintSegment(oldProg, 1.0);
+                        addPaintSegment(0.0, newProg);
+                    } else {
+                        addPaintSegment(oldProg, newProg);
+                    }
+                }
+
+                for (let enemy of enemies) {
+                    enemy.progress -= enemy.speed * dt;
+                    if (enemy.progress < 0) enemy.progress += 1.0; 
+                }
+
+                if (!player.isGrounded) {
+                    player.jumpOffset += player.jumpVelocity * dt;
+                    player.jumpVelocity -= player.gravity * dt;
+
+                    if (player.jumpOffset <= 0) {
+                        player.jumpOffset = 0;
+                        player.jumpVelocity = 0;
+                        player.isGrounded = true;
+                    }
                 }
             }
 
+            // Update particles (ia tetap terbang semasa 1.2s screen freeze)
             for (let i = particles.length - 1; i >= 0; i--) {
                 let p = particles[i];
                 p.x += p.vx * dt;
@@ -290,7 +359,9 @@
                 if (p.life <= 0) particles.splice(i, 1);
             }
 
-            checkCollisions();
+            if (gameState === 'PLAYING') {
+                checkCollisions();
+            }
         }
 
         function checkCollisions() {
@@ -308,7 +379,21 @@
                     const dist = Math.hypot(pCoords.x - eCoords.x, pCoords.y - eCoords.y);
                     
                     if (dist < (player.size/2) + (enemy.size/2)) {
-                        gameState = 'GAMEOVER';
+                        gameState = 'CRASHING'; 
+                        crashTimer = 1.2; // Set timer 1.2 saat
+                        SoundFX.crash();
+                        
+                        // Hasilkan letupan zarah yang besar semasa pelanggaran
+                        for(let k=0; k<25; k++) {
+                            particles.push({
+                                x: pCoords.x, y: pCoords.y,
+                                vx: (Math.random() - 0.5) * 200,
+                                vy: (Math.random() - 0.5) * 200,
+                                life: 1.5,
+                                size: Math.random() * 6 + 3,
+                                color: COLORS.paint
+                            });
+                        }
                     }
                 }
             }
@@ -317,14 +402,12 @@
         function draw() {
             ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-            // 1. Latar Belakang Gradient Radial
             let bgGradient = ctx.createRadialGradient(cx, cy, trackRadius * 0.2, cx, cy, Math.max(canvas.width, canvas.height));
             bgGradient.addColorStop(0, COLORS.bgCenter);
             bgGradient.addColorStop(1, COLORS.bgEdge);
             ctx.fillStyle = bgGradient;
             ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-            // 2. Latar Belakang Bulatan Dalam
             ctx.save();
             ctx.beginPath();
             ctx.arc(cx, cy, trackRadius - trackWidth/2, 0, Math.PI * 2);
@@ -335,7 +418,6 @@
             ctx.stroke();
             ctx.restore();
 
-            // 3. Landasan Asas
             ctx.shadowColor = COLORS.trackShadow;
             ctx.shadowBlur = 15;
             ctx.beginPath();
@@ -345,7 +427,6 @@
             ctx.stroke();
             ctx.shadowBlur = 0; 
 
-            // 4. Lukis Cat
             ctx.shadowColor = COLORS.paint;
             ctx.shadowBlur = 10;
             for (let seg of paintedSegments) {
@@ -360,7 +441,6 @@
             }
             ctx.shadowBlur = 0;
 
-            // 5. Zarah
             for (let p of particles) {
                 ctx.globalAlpha = p.life;
                 ctx.fillStyle = p.color;
@@ -370,7 +450,6 @@
             }
             ctx.globalAlpha = 1.0;
 
-            // 6. Musuh
             for (let enemy of enemies) {
                 const eCoords = getCoords(enemy.progress, 0);
                 ctx.save();
@@ -397,7 +476,6 @@
                 ctx.restore();
             }
 
-            // 7. Pemain
             const pProgModulo = player.progress % 1.0;
             const pCoords = getCoords(pProgModulo, player.jumpOffset);
             ctx.save();
@@ -432,13 +510,12 @@
             const percentage = Math.floor(player.progress * 100);
             let pulse = Math.abs(Math.sin(pulseTimer * 3));
 
-            if (gameState === 'PLAYING' || gameState === 'WIN' || gameState === 'GAMEOVER') {
+            if (gameState === 'PLAYING' || gameState === 'WIN' || gameState === 'GAMEOVER' || gameState === 'CRASHING') {
                 ctx.fillStyle = 'rgba(0, 0, 0, 0.2)';
                 ctx.beginPath();
                 ctx.arc(cx, cy, 60, 0, Math.PI*2);
                 ctx.fill();
 
-                // Paparkan Teks Stage di atas peratusan
                 ctx.fillStyle = 'rgba(255, 255, 255, 0.7)';
                 ctx.font = 'bold 16px Montserrat, Arial';
                 ctx.textAlign = 'center';
@@ -521,18 +598,14 @@
             if (!lastTime) lastTime = timestamp; 
             dt = (timestamp - lastTime) / 1000;
             lastTime = timestamp;
-
             if (dt < 0) dt = 0; 
             if (dt > 0.1) dt = 0.1;
-
             update();
             draw();
-
             requestAnimationFrame(loop);
         }
 
         requestAnimationFrame(loop);
-
     </script>
 </body>
 </html>
